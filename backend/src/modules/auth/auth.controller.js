@@ -1,0 +1,85 @@
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const pool = require("../../config/db");
+
+function signToken(user) {
+  return jwt.sign(
+    { id: user.id, email: user.email, role: user.role, name: user.name },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || "1d" }
+  );
+}
+
+async function register(req, res, next) {
+  try {
+    const { name, email, password } = req.body;
+    const role = req.body.role || "student";
+
+    const [existing] = await pool.query("SELECT id FROM users WHERE email = ?", [email]);
+    if (existing.length) {
+      return res.status(409).json({ message: "Email already exists" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const [result] = await pool.query(
+      "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)",
+      [name, email, hashedPassword, role]
+    );
+
+    const user = { id: result.insertId, name, email, role };
+    const token = signToken(user);
+
+    return res.status(201).json({ token, user });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function login(req, res, next) {
+  try {
+    const { email, password } = req.body;
+
+    const [rows] = await pool.query("SELECT * FROM users WHERE email = ? LIMIT 1", [email]);
+    if (!rows.length) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const user = rows[0];
+    const matched = await bcrypt.compare(password, user.password);
+    if (!matched) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const safeUser = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role
+    };
+
+    const token = signToken(safeUser);
+
+    return res.json({ token, user: safeUser });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function profile(req, res, next) {
+  try {
+    const [rows] = await pool.query(
+      "SELECT id, name, email, role, created_at FROM users WHERE id = ?",
+      [req.user.id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.json(rows[0]);
+  } catch (error) {
+    return next(error);
+  }
+}
+
+module.exports = { register, login, profile };
