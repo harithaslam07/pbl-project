@@ -5,16 +5,16 @@ Full-stack implementation based on your SRS.
 ## Stack
 - Frontend: React + Vite + Recharts
 - Backend: Express.js + JWT + bcrypt
-- Database: MySQL
+- Database: MongoDB
 
 ## Project Structure
 - `backend/` Express REST API
 - `frontend/` React app
 
 ## 1) Database Setup
-1. Create MySQL database and tables:
-   - Run: `backend/db/schema.sql`
-2. This script also inserts default emission factors.
+1. Start a MongoDB server locally or provision a MongoDB Atlas cluster.
+2. Set `MONGODB_URI` in `backend/.env`.
+3. Default emission factors are seeded automatically when the backend starts.
 
 ## 2) Backend Setup
 1. Open terminal in `backend`
@@ -22,7 +22,7 @@ Full-stack implementation based on your SRS.
 ```bash
 npm install
 ```
-3. Create `.env` from `.env.example` and fill MySQL credentials + JWT secret.
+3. Create `.env` from `.env.example` and fill MongoDB connection string + JWT secret.
 4. Start backend:
 ```bash
 npm run dev
@@ -40,18 +40,14 @@ Backend runs on `http://localhost:5000` by default.
    - `NODE_ENV=production`
    - `JWT_SECRET=your_secure_secret`
    - `JWT_EXPIRES_IN=1d`
-   - `DB_HOST=...`
-   - `DB_PORT=3306`
-   - `DB_USER=...`
-   - `DB_PASSWORD=...`
-   - `DB_NAME=...`
+   - `MONGODB_URI=mongodb+srv://...`
    - `CORS_ORIGIN=https://your-frontend-domain`
 5. Do not set `PORT` manually on Render. Render provides it automatically.
 6. After deploy, test:
    - `https://your-render-service.onrender.com/api/health`
 
 Notes:
-- Your current backend uses MySQL, so Render needs access to a MySQL database hosted on Render or an external provider.
+- Your backend now uses MongoDB, so Render needs access to a MongoDB deployment such as MongoDB Atlas.
 - If you deploy the frontend separately, update its `VITE_API_URL` to `https://your-render-service.onrender.com/api`.
 
 ## 3) Frontend Setup

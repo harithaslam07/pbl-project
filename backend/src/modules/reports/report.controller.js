@@ -1,7 +1,9 @@
 const dayjs = require("dayjs");
+const mongoose = require("mongoose");
 const PDFDocument = require("pdfkit");
 const { createObjectCsvStringifier } = require("csv-writer");
-const pool = require("../../config/db");
+const Activity = require("../../models/activity.model");
+const { serializeActivity } = require("../../utils/serializers");
 
 function monthRange(month, year) {
   const base = dayjs(`${year}-${String(month).padStart(2, "0")}-01`);
@@ -13,24 +15,44 @@ function monthRange(month, year) {
 
 async function fetchMonthly(userId, month, year) {
   const { start, end } = monthRange(month, year);
-  const [rows] = await pool.query(
-    `SELECT id, type, value, emission, activity_date
-     FROM activities
-     WHERE user_id = ? AND activity_date BETWEEN ? AND ?
-     ORDER BY activity_date ASC`,
-    [userId, start, end]
-  );
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  const filters = {
+    user: userId,
+    activity_date: {
+      $gte: dayjs(start).startOf("day").toDate(),
+      $lte: dayjs(end).endOf("day").toDate()
+    }
+  };
 
-  const [summaryRows] = await pool.query(
-    `SELECT COALESCE(SUM(emission), 0) AS total_emission,
-            COALESCE(AVG(emission), 0) AS avg_emission,
-            COUNT(*) AS total_activities
-     FROM activities
-     WHERE user_id = ? AND activity_date BETWEEN ? AND ?`,
-    [userId, start, end]
-  );
+  const [rows, summaryRows] = await Promise.all([
+    Activity.find(filters).sort({ activity_date: 1, _id: 1 }).lean(),
+    Activity.aggregate([
+      {
+        $match: {
+          user: userObjectId,
+          activity_date: {
+            $gte: dayjs(start).startOf("day").toDate(),
+            $lte: dayjs(end).endOf("day").toDate()
+          }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total_emission: { $sum: "$emission" },
+          avg_emission: { $avg: "$emission" },
+          total_activities: { $sum: 1 }
+        }
+      }
+    ])
+  ]);
 
-  return { rows, summary: summaryRows[0], start, end };
+  return {
+    rows: rows.map(serializeActivity),
+    summary: summaryRows[0] || { total_emission: 0, avg_emission: 0, total_activities: 0 },
+    start,
+    end
+  };
 }
 
 async function getMonthlyReport(req, res, next) {

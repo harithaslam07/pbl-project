@@ -41,7 +41,7 @@ router.post(
 router.put(
   "/:id",
   [
-    param("id").isInt({ gt: 0 }),
+    param("id").isMongoId(),
     body("type").optional().isIn(["transportation", "electricity", "paper", "device"]),
     body("value").optional().isFloat({ gt: 0 }),
     body("date").optional().isISO8601()
@@ -50,6 +50,6 @@ router.put(
   updateActivity
 );
 
-router.delete("/:id", [param("id").isInt({ gt: 0 })], handleValidation, deleteActivity);
+router.delete("/:id", [param("id").isMongoId()], handleValidation, deleteActivity);
 
 module.exports = router;

@@ -16,7 +16,7 @@ const router = express.Router();
 router.use(authMiddleware, requireRole("admin"));
 
 router.get("/users", listUsers);
-router.delete("/users/:id", [param("id").isInt({ gt: 0 })], handleValidation, deleteUser);
+router.delete("/users/:id", [param("id").isMongoId()], handleValidation, deleteUser);
 router.get("/stats", institutionStats);
 router.get("/factors", listFactors);
 router.put(

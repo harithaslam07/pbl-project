@@ -1,25 +1,22 @@
 const dayjs = require("dayjs");
-const pool = require("../../config/db");
+const Activity = require("../../models/activity.model");
 const { calculateEmission } = require("../../services/carbonCalculator");
+const { serializeActivity } = require("../../utils/serializers");
 
 async function createActivity(req, res, next) {
   try {
     const { type, value, date } = req.body;
     const emission = await calculateEmission(type, value);
 
-    const [result] = await pool.query(
-      "INSERT INTO activities (user_id, type, value, emission, activity_date) VALUES (?, ?, ?, ?, ?)",
-      [req.user.id, type, value, emission, dayjs(date).format("YYYY-MM-DD")]
-    );
-
-    return res.status(201).json({
-      id: result.insertId,
-      user_id: req.user.id,
+    const activity = await Activity.create({
+      user: req.user.id,
       type,
       value,
       emission,
-      activity_date: dayjs(date).format("YYYY-MM-DD")
+      activity_date: dayjs(date).startOf("day").toDate()
     });
+
+    return res.status(201).json(serializeActivity(activity));
   } catch (error) {
     return next(error);
   }
@@ -28,29 +25,28 @@ async function createActivity(req, res, next) {
 async function getActivities(req, res, next) {
   try {
     const { startDate, endDate, type } = req.query;
-
-    let sql = "SELECT * FROM activities WHERE user_id = ?";
-    const params = [req.user.id];
+    const filters = { user: req.user.id };
 
     if (startDate) {
-      sql += " AND activity_date >= ?";
-      params.push(dayjs(startDate).format("YYYY-MM-DD"));
+      filters.activity_date = {
+        ...(filters.activity_date || {}),
+        $gte: dayjs(startDate).startOf("day").toDate()
+      };
     }
 
     if (endDate) {
-      sql += " AND activity_date <= ?";
-      params.push(dayjs(endDate).format("YYYY-MM-DD"));
+      filters.activity_date = {
+        ...(filters.activity_date || {}),
+        $lte: dayjs(endDate).endOf("day").toDate()
+      };
     }
 
     if (type) {
-      sql += " AND type = ?";
-      params.push(type);
+      filters.type = type;
     }
 
-    sql += " ORDER BY activity_date DESC, id DESC";
-
-    const [rows] = await pool.query(sql, params);
-    return res.json(rows);
+    const activities = await Activity.find(filters).sort({ activity_date: -1, _id: -1 }).lean();
+    return res.json(activities.map(serializeActivity));
   } catch (error) {
     return next(error);
   }
@@ -58,17 +54,11 @@ async function getActivities(req, res, next) {
 
 async function updateActivity(req, res, next) {
   try {
-    const activityId = Number(req.params.id);
-    const [rows] = await pool.query("SELECT * FROM activities WHERE id = ? AND user_id = ?", [
-      activityId,
-      req.user.id
-    ]);
-
-    if (!rows.length) {
+    const current = await Activity.findOne({ _id: req.params.id, user: req.user.id });
+    if (!current) {
       return res.status(404).json({ message: "Activity not found" });
     }
 
-    const current = rows[0];
     const type = req.body.type || current.type;
     const value = req.body.value || current.value;
     const activityDate = req.body.date
@@ -77,19 +67,13 @@ async function updateActivity(req, res, next) {
 
     const emission = await calculateEmission(type, value);
 
-    await pool.query(
-      "UPDATE activities SET type = ?, value = ?, emission = ?, activity_date = ? WHERE id = ? AND user_id = ?",
-      [type, value, emission, activityDate, activityId, req.user.id]
-    );
+    current.type = type;
+    current.value = value;
+    current.emission = emission;
+    current.activity_date = dayjs(activityDate).startOf("day").toDate();
+    await current.save();
 
-    return res.json({
-      id: activityId,
-      user_id: req.user.id,
-      type,
-      value,
-      emission,
-      activity_date: activityDate
-    });
+    return res.json(serializeActivity(current));
   } catch (error) {
     return next(error);
   }
@@ -97,13 +81,8 @@ async function updateActivity(req, res, next) {
 
 async function deleteActivity(req, res, next) {
   try {
-    const activityId = Number(req.params.id);
-    const [result] = await pool.query("DELETE FROM activities WHERE id = ? AND user_id = ?", [
-      activityId,
-      req.user.id
-    ]);
-
-    if (!result.affectedRows) {
+    const deleted = await Activity.findOneAndDelete({ _id: req.params.id, user: req.user.id });
+    if (!deleted) {
       return res.status(404).json({ message: "Activity not found" });
     }
 

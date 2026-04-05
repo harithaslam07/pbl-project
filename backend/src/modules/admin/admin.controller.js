@@ -1,22 +1,33 @@
-const pool = require("../../config/db");
+const Activity = require("../../models/activity.model");
+const EmissionFactor = require("../../models/emissionFactor.model");
+const User = require("../../models/user.model");
+const { serializeFactor } = require("../../utils/serializers");
 
 async function listUsers(req, res, next) {
   try {
-    const [rows] = await pool.query(
-      `SELECT
-        u.id,
-        u.name,
-        u.email,
-        u.role,
-        u.created_at,
-        COUNT(a.id) AS activityCount,
-        COALESCE(SUM(a.emission), 0) AS totalEmission
-      FROM users u
-      LEFT JOIN activities a ON a.user_id = u.id
-      WHERE u.role IN ('student', 'faculty', 'admin')
-      GROUP BY u.id, u.name, u.email, u.role, u.created_at
-      ORDER BY u.created_at DESC`
-    );
+    const rows = await User.aggregate([
+      { $match: { role: { $in: ["student", "faculty", "admin"] } } },
+      {
+        $lookup: {
+          from: "activities",
+          localField: "_id",
+          foreignField: "user",
+          as: "activities"
+        }
+      },
+      {
+        $project: {
+          id: { $toString: "$_id" },
+          name: 1,
+          email: 1,
+          role: 1,
+          created_at: 1,
+          activityCount: { $size: "$activities" },
+          totalEmission: { $sum: "$activities.emission" }
+        }
+      },
+      { $sort: { created_at: -1 } }
+    ]);
     return res.json(rows);
   } catch (error) {
     return next(error);
@@ -25,12 +36,12 @@ async function listUsers(req, res, next) {
 
 async function deleteUser(req, res, next) {
   try {
-    const userId = Number(req.params.id);
-    const [result] = await pool.query("DELETE FROM users WHERE id = ?", [userId]);
-
-    if (!result.affectedRows) {
+    const user = await User.findByIdAndDelete(req.params.id);
+    if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
+
+    await Activity.deleteMany({ user: req.params.id });
 
     return res.json({ message: "User deleted" });
   } catch (error) {
@@ -40,30 +51,60 @@ async function deleteUser(req, res, next) {
 
 async function institutionStats(req, res, next) {
   try {
-    const [users] = await pool.query("SELECT COUNT(*) AS count FROM users");
-    const [students] = await pool.query("SELECT COUNT(*) AS count FROM users WHERE role = 'student'");
-    const [teachers] = await pool.query("SELECT COUNT(*) AS count FROM users WHERE role = 'faculty'");
-    const [admins] = await pool.query("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'");
-    const [activities] = await pool.query("SELECT COUNT(*) AS count FROM activities");
-    const [emissions] = await pool.query("SELECT COALESCE(SUM(emission), 0) AS total FROM activities");
-    const [byType] = await pool.query(
-      "SELECT type, COALESCE(SUM(emission),0) AS emission FROM activities GROUP BY type"
-    );
-    const [roleEmission] = await pool.query(
-      `SELECT u.role, COALESCE(SUM(a.emission), 0) AS emission
-       FROM users u
-       LEFT JOIN activities a ON a.user_id = u.id
-       WHERE u.role IN ('student', 'faculty', 'admin')
-       GROUP BY u.role`
-    );
+    const [
+      totalUsers,
+      totalStudents,
+      totalTeachers,
+      totalAdmins,
+      totalActivities,
+      emissions,
+      byType,
+      roleEmission
+    ] = await Promise.all([
+      User.countDocuments(),
+      User.countDocuments({ role: "student" }),
+      User.countDocuments({ role: "faculty" }),
+      User.countDocuments({ role: "admin" }),
+      Activity.countDocuments(),
+      Activity.aggregate([{ $group: { _id: null, total: { $sum: "$emission" } } }]),
+      Activity.aggregate([
+        { $group: { _id: "$type", emission: { $sum: "$emission" } } },
+        { $project: { _id: 0, type: "$_id", emission: 1 } },
+        { $sort: { type: 1 } }
+      ]),
+      User.aggregate([
+        { $match: { role: { $in: ["student", "faculty", "admin"] } } },
+        {
+          $lookup: {
+            from: "activities",
+            localField: "_id",
+            foreignField: "user",
+            as: "activities"
+          }
+        },
+        {
+          $project: {
+            role: 1,
+            emission: { $sum: "$activities.emission" }
+          }
+        },
+        {
+          $group: {
+            _id: "$role",
+            emission: { $sum: "$emission" }
+          }
+        },
+        { $project: { _id: 0, role: "$_id", emission: 1 } }
+      ])
+    ]);
 
     return res.json({
-      totalUsers: users[0].count,
-      totalStudents: students[0].count,
-      totalTeachers: teachers[0].count,
-      totalAdmins: admins[0].count,
-      totalActivities: activities[0].count,
-      totalEmissions: Number(emissions[0].total),
+      totalUsers,
+      totalStudents,
+      totalTeachers,
+      totalAdmins,
+      totalActivities,
+      totalEmissions: Number(emissions[0]?.total || 0),
       byType,
       roleEmission
     });
@@ -74,8 +115,8 @@ async function institutionStats(req, res, next) {
 
 async function listFactors(req, res, next) {
   try {
-    const [rows] = await pool.query("SELECT * FROM emission_factors ORDER BY activity_type ASC");
-    return res.json(rows);
+    const rows = await EmissionFactor.find().sort({ activity_type: 1 }).lean();
+    return res.json(rows.map(serializeFactor));
   } catch (error) {
     return next(error);
   }
@@ -85,11 +126,10 @@ async function upsertFactor(req, res, next) {
   try {
     const { activity_type, factor } = req.body;
 
-    await pool.query(
-      `INSERT INTO emission_factors (activity_type, factor)
-       VALUES (?, ?)
-       ON DUPLICATE KEY UPDATE factor = VALUES(factor)`,
-      [activity_type, factor]
+    await EmissionFactor.findOneAndUpdate(
+      { activity_type },
+      { activity_type, factor },
+      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
     );
 
     return res.json({ message: "Emission factor updated" });

@@ -1,18 +1,15 @@
-const pool = require("../config/db");
+const EmissionFactor = require("../models/emissionFactor.model");
 
 async function getEmissionFactor(activityType) {
-  const [rows] = await pool.query(
-    "SELECT factor FROM emission_factors WHERE activity_type = ? LIMIT 1",
-    [activityType]
-  );
+  const factorDoc = await EmissionFactor.findOne({ activity_type: activityType }).lean();
 
-  if (!rows.length) {
+  if (!factorDoc) {
     throw Object.assign(new Error(`Emission factor not found for type: ${activityType}`), {
       status: 400
     });
   }
 
-  return Number(rows[0].factor);
+  return Number(factorDoc.factor);
 }
 
 async function calculateEmission(activityType, value) {

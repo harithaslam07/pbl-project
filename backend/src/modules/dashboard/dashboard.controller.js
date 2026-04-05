@@ -1,5 +1,6 @@
 const dayjs = require("dayjs");
-const pool = require("../../config/db");
+const mongoose = require("mongoose");
+const Activity = require("../../models/activity.model");
 
 function mapTips(total) {
   if (total < 5) {
@@ -25,37 +26,46 @@ function mapTips(total) {
 
 async function getDashboardStats(req, res, next) {
   try {
-    const userId = req.user.id;
-    const startOfMonth = dayjs().startOf("month").format("YYYY-MM-DD");
+    const userObjectId = new mongoose.Types.ObjectId(req.user.id);
+    const startOfMonth = dayjs().startOf("month").toDate();
 
-    const [totalRows] = await pool.query(
-      "SELECT COALESCE(SUM(emission), 0) AS total FROM activities WHERE user_id = ?",
-      [userId]
-    );
+    const fixedTotal = await Activity.aggregate([
+      { $match: { user: userObjectId } },
+      { $group: { _id: null, total: { $sum: "$emission" } } }
+    ]);
 
-    const [monthlyRows] = await pool.query(
-      `SELECT DATE(activity_date) AS date, COALESCE(SUM(emission), 0) AS emission
-       FROM activities
-       WHERE user_id = ? AND activity_date >= ?
-       GROUP BY DATE(activity_date)
-       ORDER BY DATE(activity_date) ASC`,
-      [userId, startOfMonth]
-    );
+    const fixedMonthly = await Activity.aggregate([
+      { $match: { user: userObjectId, activity_date: { $gte: startOfMonth } } },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: "%Y-%m-%d", date: "$activity_date" }
+          },
+          emission: { $sum: "$emission" }
+        }
+      },
+      { $project: { _id: 0, date: "$_id", emission: 1 } },
+      { $sort: { date: 1 } }
+    ]);
 
-    const [typeRows] = await pool.query(
-      `SELECT type, COALESCE(SUM(emission), 0) AS emission
-       FROM activities
-       WHERE user_id = ?
-       GROUP BY type`,
-      [userId]
-    );
+    const fixedByType = await Activity.aggregate([
+      { $match: { user: userObjectId } },
+      {
+        $group: {
+          _id: "$type",
+          emission: { $sum: "$emission" }
+        }
+      },
+      { $project: { _id: 0, type: "$_id", emission: 1 } },
+      { $sort: { type: 1 } }
+    ]);
 
-    const total = Number(totalRows[0].total);
+    const total = Number(fixedTotal[0]?.total || 0);
 
     return res.json({
       totalEmission: total,
-      monthlySeries: monthlyRows,
-      byType: typeRows,
+      monthlySeries: fixedMonthly,
+      byType: fixedByType,
       suggestions: mapTips(total)
     });
   } catch (error) {
